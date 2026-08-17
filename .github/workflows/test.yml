@@ -1,0 +1,29 @@
+name: OpportunityRadar checks
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Worker syntax
+        run: node --check worker.js
+      - name: Validate public page syntax markers
+        run: |
+          test -f public/index.html
+          grep -q "Find my matches" public/index.html
+          grep -q "CHECKPOINT PASSED" public/index.html
+          grep -q "OpportunityRadar" public/index.html
+      - name: Validate SEO files
+        run: |
+          test -f public/robots.txt
+          test -f public/sitemap.xml
+          test -f public/manifest.webmanifest
+      - name: Validate configuration
+        run: |
+          test -f wrangler.jsonc
+          grep -q '"0 */6 * * *"' wrangler.jsonc
