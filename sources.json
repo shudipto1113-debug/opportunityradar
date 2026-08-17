@@ -1,0 +1,5 @@
+[
+  {"id":"grants-gov","name":"Grants.gov Applicant API","url":"https://www.grants.gov/api/api-guide","status":"ready","auth":"none","refresh":"daily","notes":"Official search2 and fetchOpportunity APIs; no authentication required."},
+  {"id":"devpost","name":"Devpost public event pages","url":"https://devpost.com/hackathons","status":"adapter-next","auth":"none","refresh":"daily","notes":"Use permitted public pages and respect site terms/robots."},
+  {"id":"kaggle","name":"Kaggle competition index","url":"https://www.kaggle.com/competitions","status":"adapter-next","auth":"none","refresh":"daily","notes":"Check each individual competition's official page before publishing detailed facts."}
+]
