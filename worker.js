@@ -16,12 +16,14 @@ const KEYWORDS = [
 ];
 const FRESH_DAYS = 7;
 const PUBLISHED_INDEX_KEY = "published:index:v1";
+const BUILD_VERSION = "2026-08-18.0119";
 
 const json = (data, status = 200, extraHeaders = {}) => new Response(JSON.stringify(data), {
   status,
   headers: {
     "content-type": "application/json; charset=utf-8",
-    "cache-control": "public,max-age=60,s-maxage=300",
+    "cache-control": "no-store",
+    "x-opportunityradar-version": BUILD_VERSION,
     ...extraHeaders
   }
 });
@@ -44,31 +46,19 @@ function parseVerificationAge(value, now) {
   return now.getTime() - t;
 }
 
-// Fail closed: missing eligibility is now a recommendation blocker.
 function runCheckpoint(record, now = new Date()) {
   const errors = [], warnings = [];
   if (!record?.official_url || !sourceAllowed(record.official_url)) errors.push("unapproved_or_missing_source");
   if (!record?.verified_at) errors.push("missing_verification");
   if (record?.status !== "open") errors.push("not_open");
-
-  if (!record?.eligibility || (Array.isArray(record.eligibility) && record.eligibility.length === 0)) {
-    errors.push("missing_eligibility");
-  }
-
+  if (!record?.eligibility || (Array.isArray(record.eligibility) && record.eligibility.length === 0)) errors.push("missing_eligibility");
   if (record?.deadline) {
     const d = Date.parse(record.deadline);
     if (Number.isNaN(d)) errors.push("invalid_deadline");
     else if (d < now.getTime()) errors.push("deadline_passed");
   }
-
-  if (!record?.prize_label && record?.award_ceiling_usd == null) {
-    warnings.push("prize_unknown");
-  }
-
-  if (parseVerificationAge(record?.verified_at, now) > FRESH_DAYS * 86400000) {
-    warnings.push("stale_verification");
-  }
-
+  if (!record?.prize_label && record?.award_ceiling_usd == null) warnings.push("prize_unknown");
+  if (parseVerificationAge(record?.verified_at, now) > FRESH_DAYS * 86400000) warnings.push("stale_verification");
   if (errors.length) return { decision: "REJECT", errors, warnings };
   if (warnings.includes("stale_verification")) return { decision: "NEEDS_REVIEW", errors, warnings };
   return { decision: "PASS", errors, warnings };
@@ -183,62 +173,40 @@ async function saveIfSafe(env, record, stats) {
     saved_at: new Date().toISOString(),
     revision: unchanged ? (previous.revision || 1) : ((previous?.revision || 0) + 1)
   };
-
   if (gate.decision === "PASS" && env.OPPORTUNITIES) {
     if (!unchanged) {
       await env.OPPORTUNITIES.put(`opportunity:${record.id}`, JSON.stringify(envelope));
       if (previous) {
         stats.updated++;
-        if (env.OPPORTUNITY_LOG) {
-          await env.OPPORTUNITY_LOG.put(
-            `change:${record.id}:${Date.now()}`,
-            JSON.stringify({
-              id: record.id,
-              previous_facts_hash: previous.source_facts_hash || null,
-              current_facts_hash: record.source_facts_hash,
-              previous_deadline: previous.deadline || null,
-              current_deadline: record.deadline || null,
-              previous_status: previous.status || null,
-              current_status: record.status || null,
-              checked_at: new Date().toISOString()
-            }),
-            { expirationTtl: 7776000 }
-          );
-        }
-      } else {
-        stats.new++;
-      }
-    } else {
-      stats.unchanged++;
-    }
+        if (env.OPPORTUNITY_LOG) await env.OPPORTUNITY_LOG.put(`change:${record.id}:${Date.now()}`, JSON.stringify({
+          id: record.id,
+          previous_facts_hash: previous.source_facts_hash || null,
+          current_facts_hash: record.source_facts_hash,
+          previous_deadline: previous.deadline || null,
+          current_deadline: record.deadline || null,
+          previous_status: previous.status || null,
+          current_status: record.status || null,
+          checked_at: new Date().toISOString()
+        }), { expirationTtl: 7776000 });
+      } else stats.new++;
+    } else stats.unchanged++;
   }
-
   if (gate.decision !== "PASS" && previous && env.OPPORTUNITIES) {
     await env.OPPORTUNITIES.delete(`opportunity:${record.id}`);
     stats.removed++;
   }
-
-  if (env.OPPORTUNITY_LOG) {
-    await env.OPPORTUNITY_LOG.put(
-      `check:${record.id}:${Date.now()}`,
-      JSON.stringify(envelope),
-      { expirationTtl: 2592000 }
-    );
-  }
-
+  if (env.OPPORTUNITY_LOG) await env.OPPORTUNITY_LOG.put(`check:${record.id}:${Date.now()}`, JSON.stringify(envelope), { expirationTtl: 2592000 });
   return gate;
 }
 
 async function refreshAgent(env) {
   const verifiedAt = new Date().toISOString();
   const stats = { searched: 0, normalized: 0, passed: 0, review: 0, rejected: 0, new: 0, updated: 0, unchanged: 0, removed: 0 };
-
   for (const keyword of KEYWORDS) {
     let result;
     try { result = await grantsSearch(keyword, 20); } catch { continue; }
     const hits = result?.data?.oppHits || [];
     stats.searched += hits.length;
-
     for (const hit of hits.slice(0, 5)) {
       try {
         const detail = await grantsFetch(hit.id);
@@ -250,46 +218,45 @@ async function refreshAgent(env) {
         if (gate.decision === "PASS") stats.passed++;
         else if (gate.decision === "NEEDS_REVIEW") stats.review++;
         else stats.rejected++;
-      } catch (error) {
-        console.log("record_refresh_error", hit.id, String(error));
-      }
+      } catch (error) { console.log("record_refresh_error", hit.id, String(error)); }
     }
   }
-
   await rebuildPublishedIndex(env);
   if (env.META) await env.META.put("last-refresh", JSON.stringify({ ...stats, at: verifiedAt }));
   console.log("OpportunityRadar refresh", stats);
   return stats;
 }
 
+async function serveAsset(request, env) {
+  if (!env.ASSETS) return new Response("OpportunityRadar", { status: 404 });
+  const url = new URL(request.url);
+  const asset = await env.ASSETS.fetch(request);
+  const headers = new Headers(asset.headers);
+  headers.set("x-opportunityradar-version", BUILD_VERSION);
+  if (url.pathname === "/" || url.pathname.endsWith(".html")) headers.set("cache-control", "no-store, max-age=0");
+  return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-
     if (url.pathname === "/api/health") {
       const meta = env.META ? await env.META.get("last-refresh", "json") : null;
-      return json({ service: "OpportunityRadar", status: "online", last_refresh: meta, storage: Boolean(env.OPPORTUNITIES) });
+      return json({ service: "OpportunityRadar", status: "online", version: BUILD_VERSION, last_refresh: meta, storage: Boolean(env.OPPORTUNITIES) });
     }
-
     if (url.pathname === "/api/opportunities") {
       try {
         const rows = await getPublishedOpportunities(env);
-        return json({ generated_at: new Date().toISOString(), count: rows.length, opportunities: rows });
+        return json({ generated_at: new Date().toISOString(), version: BUILD_VERSION, count: rows.length, opportunities: rows });
       } catch (error) {
-        return json({ error: "opportunity_read_failed", message: String(error) }, 500);
+        return json({ error: "opportunity_read_failed", message: String(error), version: BUILD_VERSION }, 500);
       }
     }
-
     if (url.pathname === "/api/stats") {
       const meta = env.META ? await env.META.get("last-refresh", "json") : null;
-      return json({ refresh: meta, storage_configured: Boolean(env.OPPORTUNITIES), log_configured: Boolean(env.OPPORTUNITY_LOG) });
+      return json({ refresh: meta, storage_configured: Boolean(env.OPPORTUNITIES), log_configured: Boolean(env.OPPORTUNITY_LOG), version: BUILD_VERSION });
     }
-
-    if (env.ASSETS) return env.ASSETS.fetch(request);
-    return new Response("OpportunityRadar", { status: 404 });
+    return serveAsset(request, env);
   },
-
-  async scheduled(controller, env, ctx) {
-    ctx.waitUntil(refreshAgent(env));
-  }
+  async scheduled(controller, env, ctx) { ctx.waitUntil(refreshAgent(env)); }
 };
