@@ -1,200 +1,24 @@
 // OpportunityRadar Worker
 // - Serves the static site through Cloudflare Workers Static Assets.
-// - Exposes a small JSON API for current opportunities and health.
+// - Exposes JSON APIs for opportunities, health, and stats.
 // - Runs a fail-closed refresh agent every 6 hours.
 // - Uses KV when configured; otherwise the site falls back to the verified bootstrap dataset.
 
-const APPROVED_HOSTS = new Set([
-  "grants.gov", "www.grants.gov",
-  "devpost.com", "www.devpost.com",
-  "kaggle.com", "www.kaggle.com"
-]);
-const KEYWORDS = [
-  "artificial intelligence", "machine learning", "research",
-  "technology", "scholarship", "fellowship", "startup"
-];
+const APPROVED_HOSTS = new Set(["grants.gov","www.grants.gov","devpost.com","www.devpost.com","kaggle.com","www.kaggle.com"]);
+const KEYWORDS = ["artificial intelligence","machine learning","research","technology","scholarship","fellowship","startup"];
 const FRESH_DAYS = 7;
-
-const json = (data, status = 200, extraHeaders = {}) => new Response(JSON.stringify(data), {
-  status,
-  headers: {
-    "content-type": "application/json; charset=utf-8",
-    "cache-control": "public, max-age=60, s-maxage=300",
-    ...extraHeaders
-  }
-});
-
-function hostOf(url) { try { return new URL(url).hostname.toLowerCase(); } catch { return ""; } }
-function sourceAllowed(url) {
-  const host = hostOf(url);
-  return [...APPROVED_HOSTS].some(h => host === h || host.endsWith(`.${h}`));
-}
-function parseDate(value) {
-  if (!value) return null;
-  const t = Date.parse(value);
-  return Number.isNaN(t) ? null : new Date(t).toISOString();
-}
-
-function runCheckpoint(record, now = new Date()) {
-  const errors = [], warnings = [];
-  if (!record.official_url || !sourceAllowed(record.official_url)) errors.push("unapproved_or_missing_source");
-  if (!record.verified_at) errors.push("missing_verification");
-  if (record.status !== "open") errors.push("not_open");
-  if (record.deadline) {
-    const d = Date.parse(record.deadline);
-    if (Number.isNaN(d)) errors.push("invalid_deadline");
-    else if (d < now.getTime()) errors.push("deadline_passed");
-  }
-  if (!record.eligibility) warnings.push("eligibility_unknown");
-  if (!record.prize_label && record.award_ceiling_usd == null) warnings.push("prize_unknown");
-  if (record.verified_at) {
-    const age = now.getTime() - Date.parse(record.verified_at);
-    if (!Number.isNaN(age) && age > FRESH_DAYS * 86400000) warnings.push("stale_verification");
-  }
-  if (errors.length) return { decision: "REJECT", errors, warnings };
-  if (warnings.includes("stale_verification")) return { decision: "NEEDS_REVIEW", errors, warnings };
-  return { decision: "PASS", errors, warnings };
-}
-
-async function grantsSearch(keyword, rows = 20) {
-  const r = await fetch("https://api.grants.gov/v1/api/search2", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ rows, keyword, oppStatuses: "posted" })
-  });
-  if (!r.ok) throw new Error(`Grants.gov search2 failed: ${r.status}`);
-  return r.json();
-}
-
-async function grantsFetch(opportunityId) {
-  const r = await fetch("https://api.grants.gov/v1/api/fetchOpportunity", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ opportunityId })
-  });
-  if (!r.ok) throw new Error(`Grants.gov fetchOpportunity failed: ${r.status}`);
-  return r.json();
-}
-
-function normalizeGrant(hit, detail, verifiedAt) {
-  const s = detail?.data?.synopsis || {};
-  return {
-    id: `grants-${hit.id}`,
-    source_id: "grants-gov",
-    title: detail?.data?.opportunityTitle || hit.title,
-    kind: "Grant",
-    status: hit.oppStatus === "posted" ? "open" : String(hit.oppStatus || "").toLowerCase(),
-    official_url: `https://www.grants.gov/search-results-detail/${hit.id}`,
-    verified_at: verifiedAt,
-    updated_at_source: s.lastUpdatedDate || null,
-    summary: s.synopsisDesc || `${hit.agencyName || ""} opportunity`,
-    countries: ["United States applicant ecosystem"],
-    geographic_scope: "country_or_applicant_specific",
-    skills: [],
-    deadline: parseDate(s.responseDate || hit.closeDate),
-    award_ceiling_usd: Number(s.awardCeiling || 0) || null,
-    award_floor_usd: Number(s.awardFloor || 0) || null,
-    prize_label: s.awardCeiling ? `Award ceiling: $${Number(s.awardCeiling).toLocaleString("en-US")}` : "Award published on official source",
-    eligibility: (s.applicantTypes || []).map(x => x.description).filter(Boolean),
-    agency: hit.agencyName || s.agencyName || null,
-    participants: null,
-    source_facts_hash: `${hit.id}|${s.lastUpdatedDate || ""}|${s.responseDate || hit.closeDate || ""}|${s.awardCeiling || ""}|${s.awardFloor || ""}`
-  };
-}
-
-async function getAiClassification(env, record) {
-  if (!env.AI) return { categories: record.skills || [] };
-  try {
-    const prompt = `Classify this verified opportunity into up to 6 short skill/category tags. Do not invent facts. Return JSON only. Title: ${record.title}. Summary: ${record.summary}`;
-    const out = await env.AI.run("@cf/meta/llama-3.2-1b-instruct", { prompt });
-    return { categories: record.skills || [], ai_raw: out?.response || null };
-  } catch { return { categories: record.skills || [] }; }
-}
-
-async function getBootstrap(env) {
-  if (env.ASSETS) {
-    const res = await env.ASSETS.fetch(new Request(new URL("/opportunities.json", "https://assets.local")));
-    if (res.ok) return res.json();
-  }
-  return [];
-}
-
-async function getPublishedOpportunities(env) {
-  if (!env.OPPORTUNITIES) return getBootstrap(env);
-  const listed = await env.OPPORTUNITIES.list({ prefix: "opportunity:" });
-  const values = await Promise.all(listed.keys.map(k => env.OPPORTUNITIES.get(k.name, "json")));
-  const rows = values.filter(Boolean).map(x => x.record || x).filter(x => runCheckpoint(x).decision === "PASS");
-  return rows.length ? rows : getBootstrap(env);
-}
-
-async function saveIfSafe(env, record) {
-  const gate = runCheckpoint(record);
-  const envelope = { record, checkpoint: gate, saved_at: new Date().toISOString() };
-  if (gate.decision === "PASS" && env.OPPORTUNITIES) {
-    await env.OPPORTUNITIES.put(`opportunity:${record.id}`, JSON.stringify(envelope));
-  }
-  if (env.OPPORTUNITY_LOG) {
-    await env.OPPORTUNITY_LOG.put(`check:${record.id}:${Date.now()}`, JSON.stringify(envelope), { expirationTtl: 2592000 });
-  }
-  return gate;
-}
-
-async function refreshAgent(env) {
-  const verifiedAt = new Date().toISOString();
-  const stats = { searched: 0, normalized: 0, passed: 0, review: 0, rejected: 0 };
-  for (const keyword of KEYWORDS) {
-    let result;
-    try { result = await grantsSearch(keyword, 20); } catch { continue; }
-    const hits = result?.data?.oppHits || [];
-    stats.searched += hits.length;
-    for (const hit of hits.slice(0, 5)) {
-      try {
-        const detail = await grantsFetch(hit.id);
-        let record = normalizeGrant(hit, detail, verifiedAt);
-        stats.normalized++;
-        const ai = await getAiClassification(env, record);
-        record.skills = ai.categories;
-        const gate = await saveIfSafe(env, record);
-        if (gate.decision === "PASS") stats.passed++;
-        else if (gate.decision === "NEEDS_REVIEW") stats.review++;
-        else stats.rejected++;
-      } catch (error) { console.log("record_refresh_error", hit.id, String(error)); }
-    }
-  }
-  if (env.META) await env.META.put("last-refresh", JSON.stringify({ ...stats, at: verifiedAt }));
-  console.log("OpportunityRadar refresh", stats);
-  return stats;
-}
-
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-
-    if (url.pathname === "/api/health") {
-      const meta = env.META ? await env.META.get("last-refresh", "json") : null;
-      return json({ service: "OpportunityRadar", status: "online", last_refresh: meta, storage: Boolean(env.OPPORTUNITIES) });
-    }
-
-    if (url.pathname === "/api/opportunities") {
-      try {
-        const rows = await getPublishedOpportunities(env);
-        return json({ generated_at: new Date().toISOString(), count: rows.length, opportunities: rows });
-      } catch (error) {
-        return json({ error: "opportunity_read_failed", message: String(error) }, 500);
-      }
-    }
-
-    if (url.pathname === "/api/stats") {
-      const meta = env.META ? await env.META.get("last-refresh", "json") : null;
-      return json({ refresh: meta, storage_configured: Boolean(env.OPPORTUNITIES), log_configured: Boolean(env.OPPORTUNITY_LOG) });
-    }
-
-    // Static routes are served automatically by Workers Static Assets.
-    if (env.ASSETS) return env.ASSETS.fetch(request);
-    return new Response("OpportunityRadar", { status: 404 });
-  },
-
-  async scheduled(controller, env, ctx) {
-    ctx.waitUntil(refreshAgent(env));
-  }
-};
+const json = (data,status=200,extraHeaders={})=>new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"public,max-age=60,s-maxage=300",...extraHeaders}});
+function hostOf(url){try{return new URL(url).hostname.toLowerCase()}catch{return ""}}
+function sourceAllowed(url){const h=hostOf(url);return [...APPROVED_HOSTS].some(x=>h===x||h.endsWith(`.${x}`))}
+function parseDate(v){if(!v)return null;const t=Date.parse(v);return Number.isNaN(t)?null:new Date(t).toISOString()}
+function runCheckpoint(r,now=new Date()){const e=[],w=[];if(!r.official_url||!sourceAllowed(r.official_url))e.push("unapproved_or_missing_source");if(!r.verified_at)e.push("missing_verification");if(r.status!=="open")e.push("not_open");if(r.deadline){const d=Date.parse(r.deadline);if(Number.isNaN(d))e.push("invalid_deadline");else if(d<now.getTime())e.push("deadline_passed")}if(!r.eligibility)w.push("eligibility_unknown");if(!r.prize_label&&r.award_ceiling_usd==null)w.push("prize_unknown");if(r.verified_at){const age=now.getTime()-Date.parse(r.verified_at);if(!Number.isNaN(age)&&age>FRESH_DAYS*86400000)w.push("stale_verification")}if(e.length)return{decision:"REJECT",errors:e,warnings:w};if(w.includes("stale_verification"))return{decision:"NEEDS_REVIEW",errors:e,warnings:w};return{decision:"PASS",errors:e,warnings:w}}
+async function grantsSearch(keyword,rows=20){const r=await fetch("https://api.grants.gov/v1/api/search2",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({rows,keyword,oppStatuses:"posted"})});if(!r.ok)throw new Error(`Grants.gov search2 failed: ${r.status}`);return r.json()}
+async function grantsFetch(id){const r=await fetch("https://api.grants.gov/v1/api/fetchOpportunity",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({opportunityId:id})});if(!r.ok)throw new Error(`Grants.gov fetchOpportunity failed: ${r.status}`);return r.json()}
+function normalizeGrant(hit,detail,verifiedAt){const s=detail?.data?.synopsis||{};const deadline=parseDate(s.responseDate||hit.closeDate);const ceiling=Number(s.awardCeiling||0)||null;const floor=Number(s.awardFloor||0)||null;return{id:`grants-${hit.id}`,source_id:"grants-gov",title:detail?.data?.opportunityTitle||hit.title,kind:"Grant",status:hit.oppStatus==="posted"?"open":String(hit.oppStatus||"").toLowerCase(),official_url:`https://www.grants.gov/search-results-detail/${hit.id}`,verified_at:verifiedAt,updated_at_source:s.lastUpdatedDate||null,summary:s.synopsisDesc||`${hit.agencyName||""} opportunity`,countries:["United States applicant ecosystem"],geographic_scope:"country_or_applicant_specific",skills:[],deadline,award_ceiling_usd:ceiling,award_floor_usd:floor,prize_label:ceiling?`Award ceiling: $${ceiling.toLocaleString("en-US")}`:"Award published on official source",eligibility:(s.applicantTypes||[]).map(x=>x.description).filter(Boolean),agency:hit.agencyName||s.agencyName||null,participants:null,source_facts_hash:`${hit.id}|${s.lastUpdatedDate||""}|${deadline||""}|${ceiling||""}|${floor||""}|${hit.oppStatus||""}`}}
+async function getAiClassification(env,record){if(!env.AI)return{categories:record.skills||[]};try{const prompt=`Classify this verified opportunity into up to 6 short skill/category tags. Do not invent facts. Return JSON only. Title: ${record.title}. Summary: ${record.summary}`;const out=await env.AI.run("@cf/meta/llama-3.2-1b-instruct",{prompt});return{categories:record.skills||[],ai_raw:out?.response||null}}catch{return{categories:record.skills||[]}}}
+async function getBootstrap(env){if(env.ASSETS){const res=await env.ASSETS.fetch(new Request(new URL("/opportunities.json","https://assets.local")));if(res.ok)return res.json()}return[]}
+async function getPublishedOpportunities(env){if(!env.OPPORTUNITIES)return getBootstrap(env);const listed=await env.OPPORTUNITIES.list({prefix:"opportunity:"});const values=await Promise.all(listed.keys.map(k=>env.OPPORTUNITIES.get(k.name,"json")));const rows=values.filter(Boolean).map(x=>x.record||x).filter(x=>runCheckpoint(x).decision==="PASS");return rows.length?rows:getBootstrap(env)}
+async function getExisting(env,id){if(!env.OPPORTUNITIES)return null;const envelope=await env.OPPORTUNITIES.get(`opportunity:${id}`,"json");return envelope?.record||envelope||null}
+async function saveIfSafe(env,record,stats){const gate=runCheckpoint(record);const previous=await getExisting(env,record.id);const unchanged=previous?.source_facts_hash&&previous.source_facts_hash===record.source_facts_hash;const envelope={record,checkpoint:gate,saved_at:new Date().toISOString(),revision:unchanged?(previous.revision||1):((previous?.revision||0)+1)};if(gate.decision==="PASS"&&env.OPPORTUNITIES){if(!unchanged){await env.OPPORTUNITIES.put(`opportunity:${record.id}`,JSON.stringify(envelope));if(previous){stats.updated++;if(env.OPPORTUNITY_LOG)await env.OPPORTUNITY_LOG.put(`change:${record.id}:${Date.now()}`,JSON.stringify({id:record.id,previous_facts_hash:previous.source_facts_hash||null,current_facts_hash:record.source_facts_hash,previous_deadline:previous.deadline||null,current_deadline:record.deadline||null,previous_status:previous.status||null,current_status:record.status||null,checked_at:new Date().toISOString()}),{expirationTtl:7776000})}else stats.new++}else stats.unchanged++}if(gate.decision!=="PASS"&&previous&&env.OPPORTUNITIES){await env.OPPORTUNITIES.delete(`opportunity:${record.id}`);stats.removed++}if(env.OPPORTUNITY_LOG)await env.OPPORTUNITY_LOG.put(`check:${record.id}:${Date.now()}`,JSON.stringify(envelope),{expirationTtl:2592000});return gate}
+async function refreshAgent(env){const verifiedAt=new Date().toISOString();const stats={searched:0,normalized:0,passed:0,review:0,rejected:0,new:0,updated:0,unchanged:0,removed:0};for(const keyword of KEYWORDS){let result;try{result=await grantsSearch(keyword,20)}catch{continue}const hits=result?.data?.oppHits||[];stats.searched+=hits.length;for(const hit of hits.slice(0,5)){try{const detail=await grantsFetch(hit.id);let record=normalizeGrant(hit,detail,verifiedAt);stats.normalized++;const ai=await getAiClassification(env,record);record.skills=ai.categories;const gate=await saveIfSafe(env,record,stats);if(gate.decision==="PASS")stats.passed++;else if(gate.decision==="NEEDS_REVIEW")stats.review++;else stats.rejected++}catch(error){console.log("record_refresh_error",hit.id,String(error))}}}if(env.META)await env.META.put("last-refresh",JSON.stringify({...stats,at:verifiedAt}));console.log("OpportunityRadar refresh",stats);return stats}
+export default{async fetch(request,env,ctx){const url=new URL(request.url);if(url.pathname==="/api/health"){const meta=env.META?await env.META.get("last-refresh","json"):null;return json({service:"OpportunityRadar",status:"online",last_refresh:meta,storage:Boolean(env.OPPORTUNITIES)})}if(url.pathname==="/api/opportunities"){try{const rows=await getPublishedOpportunities(env);return json({generated_at:new Date().toISOString(),count:rows.length,opportunities:rows})}catch(error){return json({error:"opportunity_read_failed",message:String(error)},500)}}if(url.pathname==="/api/stats"){const meta=env.META?await env.META.get("last-refresh","json"):null;return json({refresh:meta,storage_configured:Boolean(env.OPPORTUNITIES),log_configured:Boolean(env.OPPORTUNITY_LOG)})}if(env.ASSETS)return env.ASSETS.fetch(request);return new Response("OpportunityRadar",{status:404})},async scheduled(controller,env,ctx){ctx.waitUntil(refreshAgent(env))}}
