@@ -10,6 +10,12 @@
   "triggers": {
     "crons": ["0 */6 * * *"]
   },
+  "analytics_engine_datasets": [
+    {
+      "binding": "ANALYTICS",
+      "dataset": "opportunityradar_events"
+    }
+  ],
   "observability": {
     "enabled": true
   }
