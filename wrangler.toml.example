@@ -1,0 +1,26 @@
+name = "opportunityradar-agent"
+main = "worker.js"
+compatibility_date = "2026-08-17"
+
+[triggers]
+# Cloudflare Cron Triggers run in UTC. Six-hour refresh cadence keeps fast-changing
+# deadlines and status reasonably fresh while staying comfortably inside free limits.
+crons = ["0 */6 * * *"]
+
+# Fill these IDs after the free KV namespaces are created in Cloudflare.
+# Do NOT commit real IDs or secrets here if the deployment environment provides them separately.
+[[kv_namespaces]]
+binding = "OPPORTUNITIES"
+id = "REPLACE_WITH_OPPORTUNITIES_KV_ID"
+
+[[kv_namespaces]]
+binding = "OPPORTUNITY_LOG"
+id = "REPLACE_WITH_OPPORTUNITY_LOG_KV_ID"
+
+[[kv_namespaces]]
+binding = "META"
+id = "REPLACE_WITH_META_KV_ID"
+
+# Workers AI is optional. The Worker continues without AI if the AI binding is unavailable.
+[ai]
+binding = "AI"
