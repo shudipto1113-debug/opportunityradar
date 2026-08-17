@@ -11,7 +11,7 @@ const MATCH_FIX = `
       ['q','kind','scope'].forEach(function(id){var el=document.getElementById(id); if(el) el.value='';});
       var sort=document.getElementById('sort'); if(sort) sort.value='match';
       var count=document.getElementById('count'); if(count) count.textContent='Finding your best verified matches…';
-      try{fetch('/api/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({event:'match_click'})}).catch(function(){});}catch(e){}
+      try{fetch('/api/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({event:'match_click',path:location.pathname})}).catch(function(){});}catch(e){}
       setTimeout(function(){
         if(typeof window.render==='function') window.render();
         var grid=document.getElementById('grid');
@@ -32,11 +32,7 @@ async function eventResponse(request, env){
     const event=String(body?.event||'unknown').slice(0,80);
     const path=String(body?.path||'').slice(0,240);
     const country=String(body?.country||'').slice(0,96);
-    env.ANALYTICS.writeDataPoint({
-      indexes:[event],
-      blobs:[path,country],
-      doubles:[1]
-    });
+    env.ANALYTICS.writeDataPoint({indexes:[event],blobs:[path,country],doubles:[1]});
   }catch(e){}
   return new Response(null,{status:204,headers:{'cache-control':'no-store'}});
 }
@@ -49,15 +45,14 @@ export default {
     if (!env.ASSETS) return base.fetch(request, env, ctx);
     const response = await env.ASSETS.fetch(request);
     if (url.pathname === '/' || url.pathname.endsWith('.html')) {
+      const headers = new Headers(response.headers);
       const text = await response.text();
-      return new Response(text.replace('</body>', MATCH_FIX + '</body>'), {
-        status: response.status,
-        headers: new Headers(response.headers)
-      });
+      if(env.ANALYTICS){
+        env.ANALYTICS.writeDataPoint({indexes:['page_view'],blobs:[url.pathname,''],doubles:[1]});
+      }
+      return new Response(text.replace('</body>', MATCH_FIX + '</body>'), {status:response.status,headers});
     }
     return response;
   },
-  async scheduled(controller, env, ctx) {
-    return base.scheduled(controller, env, ctx);
-  }
+  async scheduled(controller, env, ctx) { return base.scheduled(controller, env, ctx); }
 };
