@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "opportunityradar",
-  "main": "worker.js",
+  "main": "wrapper.js",
   "compatibility_date": "2026-07-28",
   "assets": {
     "directory": "./public",
