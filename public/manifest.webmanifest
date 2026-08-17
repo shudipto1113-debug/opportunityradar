@@ -1,0 +1,8 @@
+{
+  "name": "OpportunityRadar",
+  "short_name": "OpportunityRadar",
+  "start_url": "/",
+  "display": "standalone",
+  "description": "Find source-backed grants, competitions and hackathons with a verification checkpoint before recommendation.",
+  "icons": []
+}
