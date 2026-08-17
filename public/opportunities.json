@@ -1,0 +1,48 @@
+[
+  {
+    "id":"cockroachdb-aws-agentic-memory-2026",
+    "title":"CockroachDB × AWS Hackathon — Build with Agentic Memory",
+    "kind":"Hackathon","source":"Devpost","official_url":"https://cockroachdb-ai.devpost.com/rules",
+    "status":"open","verified_at":"2026-08-17","deadline":"2026-08-18T17:00:00-04:00",
+    "prize_cash_usd":8750,"prize_label":"$8,750 cash","min_age":18,"student_only":false,"scope":"global",
+    "countries":"Global; standard exceptions apply","skills":["AI","AI Agents","Databases","AWS","DevOps"],
+    "summary":"Build an agentic application using CockroachDB as persistent memory and AWS as the deployment environment.",
+    "eligibility":"18+ or age of majority; teams up to 5 and organizations may enter."
+  },
+  {
+    "id":"neuralsprint-2026",
+    "title":"NeuralSprint","kind":"Hackathon","source":"Devpost","official_url":"https://neuralsprint.devpost.com/",
+    "status":"open","verified_at":"2026-08-17","deadline":"2026-08-23T23:45:00-07:00",
+    "prize_cash_usd":150,"prize_label":"$150 cash + other awards","min_age":18,"student_only":true,"scope":"global",
+    "countries":"Global; standard exceptions apply","skills":["AI","Machine Learning","Web Development","Social Good"],
+    "summary":"Online AI hackathon for students building and submitting a project.",
+    "eligibility":"Above legal age of majority; students only."
+  },
+  {
+    "id":"africa-deep-tech-2026",
+    "title":"Africa Deep Tech Challenge 2026 — The Laptop LLM Challenge","kind":"Hackathon","source":"Devpost","official_url":"https://adtc-2026.devpost.com/",
+    "status":"open","verified_at":"2026-08-17","deadline":"2026-08-24T23:45:00-07:00",
+    "prize_cash_usd":16500,"prize_label":"$16,500+ listed awards","min_age":18,"student_only":false,"scope":"country",
+    "countries":"Specific African countries only","skills":["AI","Machine Learning","LLM","On-device AI","Python"],
+    "summary":"Build an on-device language-model solution for the published ADTC Standard Laptop profile.",
+    "eligibility":"Restricted to the countries listed by the organizer; above age of majority."
+  },
+  {
+    "id":"ai-builders-2026",
+    "title":"AI Builders Hackathon","kind":"Hackathon","source":"Devpost","official_url":"https://ai-builders-hackathon-2026.devpost.com/rules",
+    "status":"open","verified_at":"2026-08-17","deadline":"2026-08-25T23:59:00-07:00",
+    "prize_cash_usd":4000,"prize_label":"$4,000 cash","min_age":18,"student_only":true,"scope":"global",
+    "countries":"Global; standard exceptions apply","skills":["AI","AI Agents","Machine Learning","Python","Web Development"],
+    "summary":"Build and submit a useful AI-powered product, agent, workflow, or intelligent system.",
+    "eligibility":"Students only; above legal age of majority."
+  },
+  {
+    "id":"volthacks-2026",
+    "title":"VoltHacks — Design. Build. Power the Future.","kind":"Hackathon","source":"Devpost","official_url":"https://volthacks.devpost.com/",
+    "status":"open","verified_at":"2026-08-17","deadline":"2026-09-05T17:00:00-04:00",
+    "prize_cash_usd":2685,"prize_label":"$2,685 explicit cash + non-cash awards","min_age":13,"student_only":true,"scope":"global",
+    "countries":"Global; standard exceptions apply","skills":["IoT","AI","Machine Learning","Hardware","Robotics"],
+    "summary":"Build real-world solutions using hardware, IoT, AI, robotics, embedded systems or smart devices.",
+    "eligibility":"13+; students only; standard geographic exceptions."
+  }
+]
