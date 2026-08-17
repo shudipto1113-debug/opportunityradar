@@ -1,9 +1,16 @@
-// OpportunityRadar autonomous refresh agent.
-// Source data first. AI is secondary for classification, normalization and translation.
-// The agent fails closed: a record cannot become a recommendation unless it passes the gate.
+// OpportunityRadar Worker: static website + autonomous refresh agent.
+// Static assets are served by Cloudflare Workers Static Assets.
+// The scheduled agent is source-first and fails closed before recommendation.
 
-const APPROVED_HOSTS = new Set(["grants.gov", "www.grants.gov", "devpost.com", "www.devpost.com", "kaggle.com", "www.kaggle.com"]);
-const KEYWORDS = ["artificial intelligence", "machine learning", "research", "technology", "scholarship", "fellowship", "startup"];
+const APPROVED_HOSTS = new Set([
+  "grants.gov", "www.grants.gov",
+  "devpost.com", "www.devpost.com",
+  "kaggle.com", "www.kaggle.com"
+]);
+const KEYWORDS = [
+  "artificial intelligence", "machine learning", "research",
+  "technology", "scholarship", "fellowship", "startup"
+];
 const FRESH_DAYS = 7;
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), {
@@ -11,15 +18,11 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), {
   headers: { "content-type": "application/json; charset=utf-8" }
 });
 
-function hostOf(url) {
-  try { return new URL(url).hostname.toLowerCase(); } catch { return ""; }
-}
-
+function hostOf(url) { try { return new URL(url).hostname.toLowerCase(); } catch { return ""; } }
 function sourceAllowed(url) {
   const host = hostOf(url);
   return [...APPROVED_HOSTS].some(h => host === h || host.endsWith(`.${h}`));
 }
-
 function parseDate(value) {
   if (!value) return null;
   const t = Date.parse(value);
@@ -56,7 +59,6 @@ async function grantsSearch(keyword, rows = 20) {
   if (!r.ok) throw new Error(`Grants.gov search2 failed: ${r.status}`);
   return r.json();
 }
-
 async function grantsFetch(opportunityId) {
   const r = await fetch("https://api.grants.gov/v1/api/fetchOpportunity", {
     method: "POST",
@@ -94,16 +96,13 @@ function normalizeGrant(hit, detail, verifiedAt) {
 }
 
 async function getAiClassification(env, record) {
-  // Optional enrichment only. If Workers AI is unavailable or over quota,
-  // preserve source fields and continue without AI. Never use AI to fill unknown facts.
-  if (!env.AI) return { categories: record.skills || [], translated_summary: null };
+  // Optional enrichment. If Workers AI is unavailable, source data is preserved.
+  if (!env.AI) return { categories: record.skills || [] };
   try {
-    const prompt = `Classify this verified opportunity into up to 6 short skill/category tags. Do not invent facts. Return JSON only.\nTitle: ${record.title}\nSummary: ${record.summary}`;
+    const prompt = `Classify this verified opportunity into up to 6 short skill/category tags. Do not invent facts. Return JSON only. Title: ${record.title}. Summary: ${record.summary}`;
     const out = await env.AI.run("@cf/meta/llama-3.2-1b-instruct", { prompt });
-    return { categories: record.skills || [], translated_summary: out?.response || null };
-  } catch {
-    return { categories: record.skills || [], translated_summary: null };
-  }
+    return { categories: record.skills || [], ai_raw: out?.response || null };
+  } catch { return { categories: record.skills || [] }; }
 }
 
 async function saveIfSafe(env, record) {
@@ -118,45 +117,45 @@ async function saveIfSafe(env, record) {
   return gate;
 }
 
-export default {
-  async scheduled(controller, env, ctx) {
-    const verifiedAt = new Date().toISOString();
-    const stats = { searched: 0, normalized: 0, passed: 0, review: 0, rejected: 0 };
-
-    for (const keyword of KEYWORDS) {
-      let result;
-      try { result = await grantsSearch(keyword, 20); } catch { continue; }
-      const hits = result?.data?.oppHits || [];
-      stats.searched += hits.length;
-
-      // Keep free-tier subrequest use bounded: fetch only a small sample per keyword.
-      for (const hit of hits.slice(0, 5)) {
-        try {
-          const detail = await grantsFetch(hit.id);
-          let record = normalizeGrant(hit, detail, verifiedAt);
-          stats.normalized++;
-          const ai = await getAiClassification(env, record);
-          record.skills = ai.categories;
-          const gate = await saveIfSafe(env, record);
-          if (gate.decision === "PASS") stats.passed++;
-          else if (gate.decision === "NEEDS_REVIEW") stats.review++;
-          else stats.rejected++;
-        } catch (error) {
-          console.log("record_refresh_error", hit.id, String(error));
-        }
-      }
+async function refreshAgent(env) {
+  const verifiedAt = new Date().toISOString();
+  const stats = { searched: 0, normalized: 0, passed: 0, review: 0, rejected: 0 };
+  for (const keyword of KEYWORDS) {
+    let result;
+    try { result = await grantsSearch(keyword, 20); } catch { continue; }
+    const hits = result?.data?.oppHits || [];
+    stats.searched += hits.length;
+    for (const hit of hits.slice(0, 5)) {
+      try {
+        const detail = await grantsFetch(hit.id);
+        let record = normalizeGrant(hit, detail, verifiedAt);
+        stats.normalized++;
+        const ai = await getAiClassification(env, record);
+        record.skills = ai.categories;
+        const gate = await saveIfSafe(env, record);
+        if (gate.decision === "PASS") stats.passed++;
+        else if (gate.decision === "NEEDS_REVIEW") stats.review++;
+        else stats.rejected++;
+      } catch (error) { console.log("record_refresh_error", hit.id, String(error)); }
     }
+  }
+  if (env.META) await env.META.put("last-refresh", JSON.stringify({ ...stats, at: verifiedAt }));
+  console.log("OpportunityRadar refresh", stats);
+  return stats;
+}
 
-    if (env.META) await env.META.put("last-refresh", JSON.stringify({ ...stats, at: verifiedAt }));
-    console.log("OpportunityRadar refresh", stats);
-  },
-
-  async fetch(request, env) {
+export default {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === "/health") {
       const meta = env.META ? await env.META.get("last-refresh", "json") : null;
       return json({ service: "OpportunityRadar", status: "online", last_refresh: meta });
     }
-    return json({ service: "OpportunityRadar", status: "online", gate: "fail-closed", timezone: "UTC" });
-  }
+    if (url.pathname === "/admin/refresh") {
+      return json({ service: "OpportunityRadar", refresh: "scheduled", next: "automatic" }, 403);
+    }
+    // Normal site routes are served by Workers Static Assets. The Worker only handles explicit API routes.
+    return new Response("Not found", { status: 404 });
+  },
+  async scheduled(controller, env, ctx) { ctx.waitUntil(refreshAgent(env)); }
 };
