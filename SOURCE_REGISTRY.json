@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "purpose": "Approved machine-readable and official public sources for the OpportunityRadar update agent.",
+  "rules": [
+    "Only sources listed here may create or update published records.",
+    "Official organizer/source pages remain authoritative for deadlines, eligibility and awards.",
+    "AI may classify or summarize verified facts but may not create missing facts.",
+    "A source failure must never cause previously verified records to be silently replaced with guessed data."
+  ],
+  "sources": [
+    {
+      "id": "grants-gov",
+      "name": "Grants.gov Applicant API",
+      "region": "United States",
+      "scope": "country_or_applicant_specific",
+      "type": "api",
+      "enabled": true,
+      "official_base": "https://www.grants.gov/",
+      "search_endpoint": "https://api.grants.gov/v1/api/search2",
+      "detail_endpoint": "https://api.grants.gov/v1/api/fetchOpportunity"
+    },
+    {
+      "id": "devpost",
+      "name": "Devpost Hackathons",
+      "region": "global",
+      "scope": "global_or_event_specific",
+      "type": "official_public_index",
+      "enabled": true,
+      "official_base": "https://devpost.com/hackathons"
+    },
+    {
+      "id": "kaggle",
+      "name": "Kaggle Competitions",
+      "region": "global",
+      "scope": "global_or_event_specific",
+      "type": "official_public_index",
+      "enabled": true,
+      "official_base": "https://www.kaggle.com/competitions"
+    }
+  ]
+}
