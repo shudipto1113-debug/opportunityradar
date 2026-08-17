@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpportunityRadar — Find opportunities that fit you</title>
+<meta name="description" content="A source-first opportunity finder for grants, competitions, hackathons and fellowships.">
+<style>
+:root{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#101828;background:#f8fafc}
+*{box-sizing:border-box}body{margin:0}.wrap{max-width:1180px;margin:auto;padding:26px 18px 64px}
+header{display:flex;justify-content:space-between;align-items:center;gap:16px}.logo{font-weight:900;font-size:20px;letter-spacing:-.03em}.live{font-size:12px;font-weight:800;color:#067647;background:#ecfdf3;padding:6px 10px;border-radius:999px}
+.hero{padding:58px 0 26px}.eyebrow{font-size:12px;font-weight:900;color:#344054;text-transform:uppercase;letter-spacing:.08em}
+h1{font-size:clamp(40px,7vw,70px);line-height:.97;letter-spacing:-.06em;max-width:820px;margin:14px 0}.lead{font-size:19px;line-height:1.5;color:#667085;max-width:760px}
+.card{background:#fff;border:1px solid #eaecf0;border-radius:18px;padding:18px;box-shadow:0 6px 24px rgba(16,24,40,.04)}
+.profile{display:grid;grid-template-columns:1.1fr .7fr 1.6fr .8fr;gap:10px}.label{font-size:12px;font-weight:800;color:#475467;margin:0 0 6px 2px}
+input,select{width:100%;padding:12px 13px;border:1px solid #d0d5dd;border-radius:12px;background:#fff}
+button{border:0;background:#101828;color:#fff;border-radius:12px;padding:12px 16px;font-weight:900;cursor:pointer}
+.row{display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-top:10px}.hint{font-size:12px;color:#667085;margin-top:10px}
+.filters{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:10px;margin-top:14px}.stats{display:flex;gap:20px;flex-wrap:wrap;color:#667085;font-size:13px;margin-top:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:16px}
+.item{display:flex;flex-direction:column;gap:10px}.top{display:flex;justify-content:space-between;align-items:center;gap:10px}.kind{font-size:12px;font-weight:900;color:#475467}.match{font-size:13px;color:#067647;font-weight:900}
+h2{margin:0;font-size:21px;line-height:1.18}.summary{color:#667085;font-size:14px;line-height:1.45}.big{font-size:21px;font-weight:900}
+.tags{display:flex;gap:6px;flex-wrap:wrap}.tag{font-size:11px;background:#f2f4f7;border-radius:999px;padding:5px 8px;color:#344054}
+.note{font-size:12px;background:#f8fafc;border:1px dashed #d0d5dd;padding:9px;border-radius:10px;color:#475467}
+.source{font-size:12px;color:#667085}.source b{color:#344054}.open{display:block;text-align:center;background:#101828;color:#fff;text-decoration:none;padding:11px;border-radius:11px;font-weight:900}
+.footer{margin-top:38px;color:#667085;font-size:12px;line-height:1.6}.empty{text-align:center;padding:34px;color:#667085}
+@media(max-width:850px){.profile,.filters{grid-template-columns:1fr 1fr}.filters input{grid-column:1/-1}}
+@media(max-width:520px){.profile,.filters{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header><div class="logo">OpportunityRadar</div><div class="live">SOURCE-FIRST • FREE MVP</div></header>
+<section class="hero"><div class="eyebrow">Find opportunities, not noise</div><h1>What can you apply for right now?</h1><p class="lead">Tell us who you are. OpportunityRadar ranks current opportunities by fit, deadline and evidence — and always sends you to the official source.</p></section>
+<section class="card">
+<div class="profile">
+<div><div class="label">Country</div><input id="country" placeholder="Bangladesh"></div>
+<div><div class="label">Age</div><input id="age" type="number" placeholder="22"></div>
+<div><div class="label">Skills</div><input id="skills" placeholder="AI, Python, research"></div>
+<div><div class="label">Student</div><select id="student"><option value="">Not specified</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+</div>
+<div class="row"><button id="match">Update my matches</button></div>
+<div class="hint">Match scores are guidance, not legal eligibility decisions. Always check the official rules.</div>
+<div class="filters"><input id="q" placeholder="Search grants, AI, hackathons, scholarships..."><select id="kind"><option value="">All types</option><option>Grant</option><option>Hackathon</option><option>Competition</option><option>Fellowship</option></select><select id="sort"><option value="match">Best match</option><option value="deadline">Deadline soon</option><option value="award">Largest award</option></select><select id="status"><option value="open">Open / live</option><option value="">All statuses</option></select></div>
+<div class="stats"><span id="count"></span><span>Source records: <span id="src"></span></span><span>Last product refresh: 17 Aug 2026</span></div>
+</section>
+<section id="grid" class="grid"></section>
+<div class="footer">Accuracy policy: source data wins over AI. Every opportunity should carry an official source URL and verification date. We do not invent eligibility, prize values or deadlines. A field may be shown as unknown when the official source does not establish it.</div>
+</div>
+<script>
+let DATA=[];let P={country:"",age:null,skills:[],student:""};
+const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+const daysLeft=d=>d?Math.ceil((new Date(d)-Date.now())/86400000):null;
+function profile(){P={country:document.querySelector('#country').value.trim().toLowerCase(),age:Number(document.querySelector('#age').value)||null,skills:document.querySelector('#skills').value.toLowerCase().split(',').map(x=>x.trim()).filter(Boolean),student:document.querySelector('#student').value};}
+function score(o){let s=50,why=[];if(P.country){const c=(o.countries||[]).map(x=>x.toLowerCase());if(c.includes('global')||c.some(x=>P.country&&x.includes(P.country))){s+=16;why.push('geography appears compatible')}}if(P.skills.length){const hay=(o.skills||[]).join(' ').toLowerCase();const hits=P.skills.filter(k=>hay.includes(k)).length;if(hits){s+=Math.min(20,hits*6);why.push('skills match')}}if(o.participants&&o.award_ceiling_usd){const density=o.award_ceiling_usd/Math.max(o.participants,1);if(density>50){s+=4;why.push('higher reward per observed participant')}}return{score:Math.max(1,Math.min(99,Math.round(s))),why};}
+function render(){profile();const q=document.querySelector('#q').value.toLowerCase(),k=document.querySelector('#kind').value,st=document.querySelector('#status').value,sort=document.querySelector('#sort').value;let rows=DATA.filter(o=>{const hay=[o.title,o.kind,o.summary,...(o.skills||[])].join(' ').toLowerCase();return(!q||hay.includes(q))&&(!k||o.kind===k)&&(!st||o.status===st)}).map(o=>({...o,...score(o)}));rows.sort((a,b)=>sort==='award'?(b.award_ceiling_usd||0)-(a.award_ceiling_usd||0):sort==='deadline'?(daysLeft(a.deadline)||9999)-(daysLeft(b.deadline)||9999):b.score-a.score);document.querySelector('#count').textContent=`${rows.length} result${rows.length===1?'':'s'}`;const grid=document.querySelector('#grid');if(!rows.length){grid.innerHTML='<div class="card empty">No verified records match those filters yet.</div>';return}grid.innerHTML=rows.map(o=>{const dl=daysLeft(o.deadline),deadline=dl===null?'Check official source':dl<0?'Closed':dl===0?'Due today':`${dl} day${dl===1?'':'s'} left`;return `<article class="card item"><div class="top"><span class="kind">${esc(o.kind)} · ${esc(o.source_id||'official source')}</span><span class="match">${o.score}% match</span></div><h2>${esc(o.title)}</h2><div class="big">${o.award_ceiling_usd?`Up to $${Number(o.award_ceiling_usd).toLocaleString()}`:'Award not published'}</div><div class="summary">${esc(o.summary)}</div><div><b>${deadline}</b></div><div class="tags">${(o.skills||[]).slice(0,6).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div><div class="note">${o.why.length?'Why: '+o.why.join(' · '):'Add skills and country to improve matching.'}</div><div class="source"><b>Verified:</b> ${esc(o.verified_at)} · <b>Rule:</b> check official source</div><a class="open" href="${esc(o.official_url)}" target="_blank" rel="noopener">Open official source ↗</a></article>`}).join('');}
+Promise.all([fetch('seed.json').then(r=>r.json()),fetch('sources.json').then(r=>r.json())]).then(([seed,sources])=>{DATA=seed.map(x=>({...x,source_id:sources.find(s=>s.id===x.source_id)?.name||x.source_id,award_ceiling_usd:x.award_ceiling_usd}));document.querySelector('#src').textContent=sources.length;render()});
+['q','kind','sort','status'].forEach(id=>document.querySelector('#'+id).addEventListener('input',render));document.querySelector('#match').addEventListener('click',render);
+</script>
+</body></html>
