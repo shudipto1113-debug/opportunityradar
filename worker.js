@@ -1,6 +1,8 @@
-// OpportunityRadar Worker: static website + autonomous refresh agent.
-// Static assets are served by Cloudflare Workers Static Assets.
-// The scheduled agent is source-first and fails closed before recommendation.
+// OpportunityRadar Worker
+// - Serves the static site through Cloudflare Workers Static Assets.
+// - Exposes a small JSON API for current opportunities and health.
+// - Runs a fail-closed refresh agent every 6 hours.
+// - Uses KV when configured; otherwise the site falls back to the verified bootstrap dataset.
 
 const APPROVED_HOSTS = new Set([
   "grants.gov", "www.grants.gov",
@@ -13,9 +15,13 @@ const KEYWORDS = [
 ];
 const FRESH_DAYS = 7;
 
-const json = (data, status = 200) => new Response(JSON.stringify(data), {
+const json = (data, status = 200, extraHeaders = {}) => new Response(JSON.stringify(data), {
   status,
-  headers: { "content-type": "application/json; charset=utf-8" }
+  headers: {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "public, max-age=60, s-maxage=300",
+    ...extraHeaders
+  }
 });
 
 function hostOf(url) { try { return new URL(url).hostname.toLowerCase(); } catch { return ""; } }
@@ -59,6 +65,7 @@ async function grantsSearch(keyword, rows = 20) {
   if (!r.ok) throw new Error(`Grants.gov search2 failed: ${r.status}`);
   return r.json();
 }
+
 async function grantsFetch(opportunityId) {
   const r = await fetch("https://api.grants.gov/v1/api/fetchOpportunity", {
     method: "POST",
@@ -96,13 +103,28 @@ function normalizeGrant(hit, detail, verifiedAt) {
 }
 
 async function getAiClassification(env, record) {
-  // Optional enrichment. If Workers AI is unavailable, source data is preserved.
   if (!env.AI) return { categories: record.skills || [] };
   try {
     const prompt = `Classify this verified opportunity into up to 6 short skill/category tags. Do not invent facts. Return JSON only. Title: ${record.title}. Summary: ${record.summary}`;
     const out = await env.AI.run("@cf/meta/llama-3.2-1b-instruct", { prompt });
     return { categories: record.skills || [], ai_raw: out?.response || null };
   } catch { return { categories: record.skills || [] }; }
+}
+
+async function getBootstrap(env) {
+  if (env.ASSETS) {
+    const res = await env.ASSETS.fetch(new Request(new URL("/opportunities.json", "https://assets.local")));
+    if (res.ok) return res.json();
+  }
+  return [];
+}
+
+async function getPublishedOpportunities(env) {
+  if (!env.OPPORTUNITIES) return getBootstrap(env);
+  const listed = await env.OPPORTUNITIES.list({ prefix: "opportunity:" });
+  const values = await Promise.all(listed.keys.map(k => env.OPPORTUNITIES.get(k.name, "json")));
+  const rows = values.filter(Boolean).map(x => x.record || x).filter(x => runCheckpoint(x).decision === "PASS");
+  return rows.length ? rows : getBootstrap(env);
 }
 
 async function saveIfSafe(env, record) {
@@ -147,15 +169,32 @@ async function refreshAgent(env) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (url.pathname === "/health") {
+
+    if (url.pathname === "/api/health") {
       const meta = env.META ? await env.META.get("last-refresh", "json") : null;
-      return json({ service: "OpportunityRadar", status: "online", last_refresh: meta });
+      return json({ service: "OpportunityRadar", status: "online", last_refresh: meta, storage: Boolean(env.OPPORTUNITIES) });
     }
-    if (url.pathname === "/admin/refresh") {
-      return json({ service: "OpportunityRadar", refresh: "scheduled", next: "automatic" }, 403);
+
+    if (url.pathname === "/api/opportunities") {
+      try {
+        const rows = await getPublishedOpportunities(env);
+        return json({ generated_at: new Date().toISOString(), count: rows.length, opportunities: rows });
+      } catch (error) {
+        return json({ error: "opportunity_read_failed", message: String(error) }, 500);
+      }
     }
-    // Normal site routes are served by Workers Static Assets. The Worker only handles explicit API routes.
-    return new Response("Not found", { status: 404 });
+
+    if (url.pathname === "/api/stats") {
+      const meta = env.META ? await env.META.get("last-refresh", "json") : null;
+      return json({ refresh: meta, storage_configured: Boolean(env.OPPORTUNITIES), log_configured: Boolean(env.OPPORTUNITY_LOG) });
+    }
+
+    // Static routes are served automatically by Workers Static Assets.
+    if (env.ASSETS) return env.ASSETS.fetch(request);
+    return new Response("OpportunityRadar", { status: 404 });
   },
-  async scheduled(controller, env, ctx) { ctx.waitUntil(refreshAgent(env)); }
+
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(refreshAgent(env));
+  }
 };
