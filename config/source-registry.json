@@ -1,0 +1,11 @@
+{
+  "policy_version":"1.0",
+  "principle":"Only official or first-party public sources can become recommendation records.",
+  "sources":[
+    {"id":"grants-gov","name":"Grants.gov","kind":"grant","url":"https://www.grants.gov/","discovery_url":"https://www.grants.gov/api/common/search2","status":"active","adapter":"grants_search2_fetchOpportunity","official_machine_readable":true},
+    {"id":"devpost","name":"Devpost","kind":"hackathon","url":"https://devpost.com/hackathons","status":"monitor","adapter":"devpost_public_directory","notes":"Public directory is authoritative for hosted hackathons. Records must be re-verified on the individual organizer page before publication."},
+    {"id":"kaggle","name":"Kaggle Competitions","kind":"competition","url":"https://www.kaggle.com/competitions","status":"monitor","adapter":"kaggle_public_directory","notes":"Competition directory is first-party. Records must retain the official competition URL and pass the same checkpoint."}
+  ],
+  "blocked_sources":["blogs","aggregators","scraped opportunity lists","social media posts as sole evidence"],
+  "publish_rule":"A source can discover a candidate, but a candidate is publishable only after the server checkpoint passes with an official source URL, verification timestamp, open status, usable deadline and non-empty eligibility evidence."
+}
